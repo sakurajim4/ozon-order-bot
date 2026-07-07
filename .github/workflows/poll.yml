@@ -1,0 +1,62 @@
+name: Ozon bot poll
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # раз в 10 минут; GitHub может отставать на бесплатном тарифе
+  workflow_dispatch: {}        # + кнопка "Run workflow" на вкладке Actions, чтобы запустить вручную
+
+concurrency:
+  group: ozon-bot-poll
+  cancel-in-progress: false     # не обрывать предыдущий проход, если следующий тик подоспел раньше
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Ключ для восстановления всегда новый (run_id) — специально, чтобы
+      # никогда не было "точного совпадения" (при точном совпадении шаг
+      # actions/cache пропускает сохранение в конце джобы). Реальное
+      # восстановление идёт по restore-keys — подхватит самый свежий кэш с
+      # этим префиксом, то есть состояние из прошлого запуска.
+      - name: Восстановить состояние (что уже отправлено/напечатано)
+        uses: actions/cache@v4
+        with:
+          path: bot_state.sqlite3
+          key: ozon-bot-state-${{ github.run_id }}
+          restore-keys: |
+            ozon-bot-state-
+
+      - run: pip install -r requirements.txt
+
+      - name: Один проход поллинга + обработка команд Telegram
+        run: python run_once.py
+        env:
+          SHOP_1_NAME: ${{ secrets.SHOP_1_NAME }}
+          SHOP_1_CLIENT_ID: ${{ secrets.SHOP_1_CLIENT_ID }}
+          SHOP_1_API_KEY: ${{ secrets.SHOP_1_API_KEY }}
+          SHOP_2_NAME: ${{ secrets.SHOP_2_NAME }}
+          SHOP_2_CLIENT_ID: ${{ secrets.SHOP_2_CLIENT_ID }}
+          SHOP_2_API_KEY: ${{ secrets.SHOP_2_API_KEY }}
+          SHOP_3_NAME: ${{ secrets.SHOP_3_NAME }}
+          SHOP_3_CLIENT_ID: ${{ secrets.SHOP_3_CLIENT_ID }}
+          SHOP_3_API_KEY: ${{ secrets.SHOP_3_API_KEY }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+
+      # actions/cache не даёт перезаписать существующий ключ в том же ране,
+      # поэтому сохраняем под тем же ключом явным шагом save (а не полагаясь
+      # на автосохранение в конце джобы, которого при точном совпадении key
+      # не происходит).
+      - name: Сохранить состояние
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: bot_state.sqlite3
+          key: ozon-bot-state-${{ github.run_id }}
