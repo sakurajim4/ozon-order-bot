@@ -12,7 +12,7 @@ concurrency:
 jobs:
   poll:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15   # временно увеличено для диагностики; вернуть к 5 после того как разберёмся, что тормозит
     steps:
       - uses: actions/checkout@v4
 
@@ -37,8 +37,9 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Один проход поллинга + обработка команд Telegram
-        run: python run_once.py
+        run: python -u run_once.py
         env:
+          PYTHONUNBUFFERED: '1'   # без этого print() в логах Actions может не появляться до самого конца шага
           SHOP_1_NAME: ${{ secrets.SHOP_1_NAME }}
           SHOP_1_CLIENT_ID: ${{ secrets.SHOP_1_CLIENT_ID }}
           SHOP_1_API_KEY: ${{ secrets.SHOP_1_API_KEY }}

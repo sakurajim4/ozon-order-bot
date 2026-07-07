@@ -260,12 +260,15 @@ async def _poll_shop(db, lock, shop) -> set:
     now = int(time.time())
     fetched = set()
 
+    print(f"[poll] [{shop.name}] старт", flush=True)
     for status in ("awaiting_packaging", "awaiting_deliver"):
+        t0 = time.time()
         try:
             postings = await ozon_client.iter_fbs_postings(shop, status, since_iso, to_iso)
         except Exception as e:
-            print(f"[poll] [{shop.name}] список {status} не получен: {e}")
+            print(f"[poll] [{shop.name}] список {status} не получен: {e}", flush=True)
             continue
+        print(f"[poll] [{shop.name}] {status}: {len(postings)} шт., {time.time() - t0:.1f} сек", flush=True)
         for p in postings:
             pn = p.get("posting_number")
             if not pn:
@@ -279,13 +282,16 @@ async def _poll_shop(db, lock, shop) -> set:
 
     # Отправления этого магазина, пропавшие из выборки по awaiting_*, могли
     # смениться на отменённые/другой статус — уточняем поштучно.
-    for pn in await db_module.get_active_tracked_numbers(db, lock, shop.key):
-        if pn in fetched:
-            continue
+    tracked = await db_module.get_active_tracked_numbers(db, lock, shop.key)
+    to_check = [pn for pn in tracked if pn not in fetched]
+    print(f"[poll] [{shop.name}] реконсиляция: {len(to_check)} отправлений "
+          f"(всего отслеживается {len(tracked)})", flush=True)
+    t0 = time.time()
+    for i, pn in enumerate(to_check, 1):
         try:
             detail = await ozon_client.get_posting(shop, pn)
         except Exception as e:
-            print(f"[poll] [{shop.name}] уточнение статуса {pn} не удалось: {e}")
+            print(f"[poll] [{shop.name}] уточнение статуса {pn} не удалось: {e}", flush=True)
             continue
         status = detail.get("status", "unknown")
         products = _extract_products(detail)
@@ -294,6 +300,9 @@ async def _poll_shop(db, lock, shop) -> set:
             detail.get("in_process_at") or detail.get("created_at"), now,
         )
         await db_module.mark_cancelled_if_needed(db, lock, pn, status, now)
+        if i % 10 == 0 or i == len(to_check):
+            print(f"[poll] [{shop.name}] реконсиляция: {i}/{len(to_check)}, "
+                  f"{time.time() - t0:.1f} сек", flush=True)
 
     return fetched
 
