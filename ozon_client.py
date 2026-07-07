@@ -42,7 +42,7 @@ async def _http(shop, path, body, method, delays):
     url = OZON_API + path
     headers = _headers(shop)
     attempt = 0
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=35) as client:
         while True:
             try:
                 if method == "GET":

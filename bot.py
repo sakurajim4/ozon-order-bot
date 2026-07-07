@@ -228,9 +228,13 @@ async def process_label_ready(db, lock, bot_token, chat_id):
     for shop_key, posting_numbers in postings_by_shop.items():
         shop = SHOPS_BY_KEY.get(shop_key)
         if shop is None:
-            print(f"[label] неизвестный shop_key={shop_key} (магазин удалили из .env?) — пропускаю {posting_numbers}")
+            print(f"[label] неизвестный shop_key={shop_key} (магазин удалили из .env?) — пропускаю {posting_numbers}", flush=True)
             continue
+        print(f"[label] [{shop.name}] запрашиваю {len(posting_numbers)} этикеток...", flush=True)
+        t0 = time.time()
         label_map, error_map = await pdf_label.fetch_labels(shop, posting_numbers)
+        print(f"[label] [{shop.name}] получено {len(label_map)}, ошибок {len(error_map)}, "
+              f"{time.time() - t0:.1f} сек", flush=True)
         for pn, raw_pdf in label_map.items():
             products = products_by_pn[pn]
             lines = pdf_label.format_offer_id_lines(products)
