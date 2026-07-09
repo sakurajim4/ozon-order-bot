@@ -85,22 +85,22 @@ async def handle_pending(request):
     await _require_admin(request)
     db, lock = request.app["db"], request.app["lock"]
 
-    rows = await db_module.get_pending_for_merge(db, lock, label_required=False)
+    rows = await db_module.get_pending_for_webapp(db, lock)
     by_shop = {}
-    for pn, shop_key, _status, products_json, _label_sent_at in rows:
-        by_shop.setdefault(shop_key, []).append((pn, json.loads(products_json)))
+    for pn, shop_key, products_json, first_seen_at in rows:
+        by_shop.setdefault(shop_key, []).append((pn, json.loads(products_json), first_seen_at))
 
     shops_out = []
     for shop_key, entries in by_shop.items():
         shop = bot.SHOPS_BY_KEY.get(shop_key)
         shop_name = shop.name if shop else f"магазин {shop_key}"
         offer_ids = sorted({
-            p.get("offer_id") for _pn, products in entries for p in products if p.get("offer_id")
+            p.get("offer_id") for _pn, products, _ts in entries for p in products if p.get("offer_id")
         })
         images = await ozon_client.get_product_main_images(shop, offer_ids) if (shop and offer_ids) else {}
 
         postings_out = []
-        for pn, products in entries:
+        for pn, products, first_seen_at in entries:
             photo_url = next(
                 (images.get(p.get("offer_id")) for p in products if images.get(p.get("offer_id"))), None,
             )
@@ -109,6 +109,8 @@ async def handle_pending(request):
                 "name": bot._short_name(products),
                 "qty": (products[0].get("quantity", 1) if products else 1),
                 "photo_url": photo_url,
+                "first_seen_at": first_seen_at,
+                "first_seen_label": time.strftime("%d.%m %H:%M", time.localtime(first_seen_at)),
             })
         shops_out.append({"shop_key": shop_key, "shop_name": shop_name, "postings": postings_out})
 
@@ -193,6 +195,33 @@ async def handle_picking_list(request):
     return web.json_response({"ok": True, "items": len(items)})
 
 
+async def handle_print_labels(request):
+    """Настоящие этикетки Ozon с наложенным артикулом — то же самое, что
+    делает /merge в самом боте (bot.run_merge), просто запущено отсюда.
+    Переиспользуем run_merge как есть: те же проверки (нет/отменено/нет
+    готовой этикетки), та же пометка printed_at, тот же формат ответа в
+    чат — никакой отдельной логики печати тут нет."""
+    user = await _require_admin(request)
+    db, lock = request.app["db"], request.app["lock"]
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="Некорректный JSON")
+    posting_numbers = body.get("posting_numbers") or []
+    if not posting_numbers or not isinstance(posting_numbers, list):
+        raise web.HTTPBadRequest(text="Пустой список posting_numbers")
+
+    chat_id = str(user["id"])
+    try:
+        await bot.run_merge(db, lock, config.BOT_TOKEN, chat_id, posting_numbers, is_reprint=False)
+    except Exception as e:
+        print(f"[webapp] печать этикеток для {chat_id} не удалась: {e}")
+        raise web.HTTPInternalServerError(text="Не удалось собрать/отправить этикетки — попробуйте ещё раз")
+
+    return web.json_response({"ok": True})
+
+
 # ============================================================
 # === Статика
 # ============================================================
@@ -218,6 +247,7 @@ async def build_app(db, lock) -> web.Application:
     app["db"], app["lock"] = db, lock
     app.router.add_get("/api/pending", handle_pending)
     app.router.add_post("/api/picking-list", handle_picking_list)
+    app.router.add_post("/api/print-labels", handle_print_labels)
     app.router.add_get("/", handle_index)
     app.router.add_get("/app.js", handle_app_js)
     app.router.add_get("/style.css", handle_style_css)

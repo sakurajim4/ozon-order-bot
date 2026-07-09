@@ -208,6 +208,20 @@ async def get_pending_for_merge(db, lock, label_required=True):
         return await cur.fetchall()
 
 
+async def get_pending_for_webapp(db, lock):
+    """Как get_pending_for_merge(label_required=False), но с first_seen_at —
+    нужен мини-аппу (webapp_server.py) для хронологической сортировки/выбора
+    "этот и все, что после". Отдельная функция, чтобы не менять форму
+    возврата get_pending_for_merge (её распаковка завязана в bot.py)."""
+    async with lock:
+        cur = await db.execute(
+            "SELECT posting_number, shop_key, products_json, first_seen_at FROM postings "
+            "WHERE printed_at IS NULL AND cancelled_at IS NULL "
+            "ORDER BY first_seen_at ASC"
+        )
+        return await cur.fetchall()
+
+
 async def get_postings_by_numbers(db, lock, posting_numbers):
     async with lock:
         placeholders = ",".join("?" for _ in posting_numbers)

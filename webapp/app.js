@@ -5,7 +5,7 @@ tg.expand();
 const initData = tg.initData || "";
 
 const state = {
-  shops: [],   // [{shop_key, shop_name, postings: [{pn, name, qty, photo_url}]}]
+  shops: [],   // [{shop_key, shop_name, postings: [{pn, name, qty, photo_url, first_seen_at, first_seen_label}]}]
   selected: new Set(),
   filterText: "",
 };
@@ -14,6 +14,8 @@ const listEl = document.getElementById("list");
 const emptyEl = document.getElementById("empty");
 const counterEl = document.getElementById("counter");
 const filterEl = document.getElementById("filter");
+const secondaryBar = document.getElementById("secondary-bar");
+const secondaryBtn = document.getElementById("secondary-btn");
 
 function applyTheme() {
   const p = tg.themeParams || {};
@@ -34,6 +36,12 @@ function matchesFilter(posting, text) {
   return posting.pn.toLowerCase().includes(t) || posting.name.toLowerCase().includes(t);
 }
 
+function allPostingsFlat() {
+  const result = [];
+  for (const shop of state.shops) result.push(...shop.postings);
+  return result;
+}
+
 function visiblePostingsFlat() {
   const result = [];
   for (const shop of state.shops) {
@@ -50,15 +58,29 @@ function toggle(pn) {
   render();
 }
 
+// "Этот и все, что после" — по всем магазинам сразу, по хронологии
+// (first_seen_at), заменяет текущий выбор (а не добавляет к нему).
+function selectFrom(posting) {
+  state.selected = new Set(
+    allPostingsFlat()
+      .filter(p => p.first_seen_at >= posting.first_seen_at)
+      .map(p => p.pn),
+  );
+  render();
+}
+
 function updateCounterAndButton() {
   const n = state.selected.size;
   counterEl.textContent = `Выбрано: ${n}`;
   if (n > 0) {
-    tg.MainButton.setText(`Собрать PDF (${n})`);
+    tg.MainButton.setText(`🖨 Печать этикеток (${n})`);
     tg.MainButton.show();
     tg.MainButton.enable();
+    secondaryBtn.textContent = `🗂 PDF со списком (${n})`;
+    secondaryBar.style.display = "block";
   } else {
     tg.MainButton.hide();
+    secondaryBar.style.display = "none";
   }
 }
 
@@ -101,11 +123,23 @@ function render() {
       const nameEl = document.createElement("div");
       nameEl.className = "name";
       nameEl.textContent = posting.name + (posting.qty > 1 ? ` ×${posting.qty}` : "");
-      const pnEl = document.createElement("div");
-      pnEl.className = "pn";
-      pnEl.textContent = posting.pn;
       info.appendChild(nameEl);
-      info.appendChild(pnEl);
+
+      const pnRow = document.createElement("div");
+      pnRow.className = "pn-row";
+      const pnEl = document.createElement("span");
+      pnEl.className = "pn";
+      pnEl.textContent = `${posting.pn} · ${posting.first_seen_label || ""}`;
+      pnRow.appendChild(pnEl);
+      const fromEl = document.createElement("span");
+      fromEl.className = "select-from";
+      fromEl.textContent = "⏱ и позже";
+      fromEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectFrom(posting);
+      });
+      pnRow.appendChild(fromEl);
+      info.appendChild(pnRow);
       row.appendChild(info);
 
       const check = document.createElement("div");
@@ -150,13 +184,21 @@ async function loadPending() {
   }
 }
 
-tg.MainButton.onClick(async () => {
+async function submitSelection(endpoint, successMessage, button) {
   const pns = Array.from(state.selected);
   if (!pns.length) return;
-  tg.MainButton.showProgress(true);
-  tg.MainButton.disable();
+  const restore = button === tg.MainButton
+    ? () => { tg.MainButton.hideProgress(); tg.MainButton.enable(); }
+    : () => { secondaryBtn.disabled = false; secondaryBtn.textContent = `🗂 PDF со списком (${pns.length})`; };
+  if (button === tg.MainButton) {
+    tg.MainButton.showProgress(true);
+    tg.MainButton.disable();
+  } else {
+    secondaryBtn.disabled = true;
+    secondaryBtn.textContent = "Собираю…";
+  }
   try {
-    const resp = await fetch("/api/picking-list", {
+    const resp = await fetch(endpoint, {
       method: "POST",
       headers: {
         "Authorization": `tma ${initData}`,
@@ -170,7 +212,7 @@ tg.MainButton.onClick(async () => {
     }
     if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
     if (tg.showPopup) {
-      tg.showPopup({ message: "PDF отправлен в чат ✅" }, () => tg.close());
+      tg.showPopup({ message: `${successMessage} ✅` }, () => tg.close());
     } else {
       tg.close();
     }
@@ -178,9 +220,11 @@ tg.MainButton.onClick(async () => {
     if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("error");
     alert("Ошибка: " + e.message);
   } finally {
-    tg.MainButton.hideProgress();
-    tg.MainButton.enable();
+    restore();
   }
-});
+}
+
+tg.MainButton.onClick(() => submitSelection("/api/print-labels", "Этикетки отправлены в чат", tg.MainButton));
+secondaryBtn.addEventListener("click", () => submitSelection("/api/picking-list", "PDF отправлен в чат", secondaryBtn));
 
 loadPending();
