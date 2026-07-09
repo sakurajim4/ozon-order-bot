@@ -50,9 +50,16 @@ def _shop_name(shop_key: str) -> str:
 # === Telegram: низкоуровневые вызовы
 # ============================================================
 
+def _telegram_client(timeout):
+    """httpx-клиент для api.telegram.org — единственное место, где включается
+    config.TELEGRAM_PROXY (Ozon-запросы и скачивание фото с CDN Ozon через
+    него НЕ идут)."""
+    return httpx.AsyncClient(timeout=timeout, proxy=config.TELEGRAM_PROXY)
+
+
 async def telegram_send(bot_token, chat_id, text, reply_markup=None):
     api = TELEGRAM_API.format(token=bot_token, method="sendMessage")
-    async with httpx.AsyncClient(timeout=25) as client:
+    async with _telegram_client(25) as client:
         for start in range(0, max(1, len(text)), 4000):
             chunk = text[start:start + 4000]
             payload = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
@@ -68,7 +75,7 @@ async def telegram_send(bot_token, chat_id, text, reply_markup=None):
 async def telegram_send_keyboard(bot_token, chat_id, text, reply_markup) -> int:
     api = TELEGRAM_API.format(token=bot_token, method="sendMessage")
     payload = {"chat_id": chat_id, "text": text, "reply_markup": json.dumps(reply_markup)}
-    async with httpx.AsyncClient(timeout=25) as client:
+    async with _telegram_client(25) as client:
         r = await client.post(api, data=payload)
         r.raise_for_status()
         return r.json()["result"]["message_id"]
@@ -81,7 +88,7 @@ async def telegram_edit_message(bot_token, chat_id, message_id, text, reply_mark
     payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
     if reply_markup is not None:
         payload["reply_markup"] = json.dumps(reply_markup)
-    async with httpx.AsyncClient(timeout=25) as client:
+    async with _telegram_client(25) as client:
         r = await client.post(api, data=payload)
         if r.status_code != 200 and "not modified" not in r.text:
             print(f"[telegram] edit message failed: {r.status_code} {r.text[:200]}")
@@ -92,7 +99,7 @@ async def telegram_answer_callback(bot_token, callback_query_id, text=None):
     payload = {"callback_query_id": callback_query_id}
     if text:
         payload["text"] = text
-    async with httpx.AsyncClient(timeout=25) as client:
+    async with _telegram_client(25) as client:
         try:
             await client.post(api, data=payload)
         except Exception as e:
@@ -114,7 +121,7 @@ async def telegram_send_photo(bot_token, chat_id, photo_url, caption):
     api = TELEGRAM_API.format(token=bot_token, method="sendPhoto")
     data = {"chat_id": chat_id, "caption": caption[:1024]}
     files = {"photo": ("photo.jpg", photo_bytes, "image/jpeg")}
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with _telegram_client(30) as client:
         r = await client.post(api, data=data, files=files)
         if r.status_code != 200:
             raise RuntimeError(f"sendPhoto failed: {r.status_code} {r.text[:300]}")
@@ -126,7 +133,7 @@ async def telegram_send_document(bot_token, chat_id, pdf_bytes, filename, captio
     if caption:
         data["caption"] = caption[:1024]
     files = {"document": (filename, pdf_bytes, "application/pdf")}
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with _telegram_client(60) as client:
         r = await client.post(api, data=data, files=files)
         if r.status_code != 200:
             raise RuntimeError(f"sendDocument failed: {r.status_code} {r.text[:300]}")
@@ -140,7 +147,7 @@ async def telegram_get_updates(bot_token, offset, timeout=20):
     params = {"timeout": timeout, "allowed_updates": json.dumps(["message", "callback_query"])}
     if offset is not None:
         params["offset"] = offset
-    async with httpx.AsyncClient(timeout=max(25, timeout + 5)) as client:
+    async with _telegram_client(max(25, timeout + 5)) as client:
         r = await client.get(api, params=params)
         r.raise_for_status()
         return r.json()

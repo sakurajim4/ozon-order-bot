@@ -1,9 +1,12 @@
 name: Ozon bot poll
 
 on:
-  schedule:
-    - cron: '*/10 * * * *'   # раз в 10 минут; GitHub может отставать на бесплатном тарифе
-  workflow_dispatch: {}        # + кнопка "Run workflow" на вкладке Actions, чтобы запустить вручную
+  # cron отключён 2026-07-09 — бот переехал на постоянную ВМ (VPS,
+  # см. DEPLOY.md), которая теперь и шлёт уведомления (через прокси для
+  # Telegram). Держать оба поллера включёнными нельзя — задублируются
+  # уведомления и этикетки. workflow_dispatch оставлен как аварийный ручной
+  # запуск, если VPS ляжет.
+  workflow_dispatch: {}        # кнопка "Run workflow" на вкладке Actions, чтобы запустить вручную
 
 concurrency:
   group: ozon-bot-poll

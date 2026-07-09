@@ -84,3 +84,9 @@ MAX_OFFER_IDS_ON_LABEL = int(os.environ.get("MAX_OFFER_IDS_ON_LABEL", "4"))
 
 # Telegram: жёсткий лимит сервера на загружаемый ботом документ — 50 МБ.
 TELEGRAM_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+
+# Прокси только для запросов к api.telegram.org (Ozon-запросы его не
+# используют) — на некоторых VPS/сетях РФ исходящий TCP/443 к Telegram
+# режется на уровне сети, см. DEPLOY.md. Формат: socks5h://user:pass@host:port
+# (пусто = без прокси, прямое подключение).
+TELEGRAM_PROXY = os.environ.get("TELEGRAM_PROXY", "").strip() or None
