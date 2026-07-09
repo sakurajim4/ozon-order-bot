@@ -59,6 +59,14 @@ SHOPS = _load_shops()
 BOT_TOKEN = _require("BOT_TOKEN")
 CHAT_ID = _require("CHAT_ID")
 
+# Доп. получатели уведомлений/этикеток (только просмотр — команды и кнопки
+# по-прежнему реагируют только на CHAT_ID, см. bot.py). Через запятую в
+# .env: EXTRA_CHAT_IDS=123456,789012
+EXTRA_CHAT_IDS = [
+    c.strip() for c in os.environ.get("EXTRA_CHAT_IDS", "").split(",") if c.strip()
+]
+NOTIFY_CHAT_IDS = [CHAT_ID] + [c for c in EXTRA_CHAT_IDS if c != CHAT_ID]
+
 DB_PATH = os.path.join(_BASE_DIR, "bot_state.sqlite3")
 
 # Как часто опрашивать Ozon на новые/готовые к отгрузке отправления.

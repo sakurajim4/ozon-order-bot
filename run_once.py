@@ -28,7 +28,7 @@ async def main():
 
     print(f"[run_once] Поллинг {len(config.SHOPS)} магазинов: "
           f"{', '.join(s.name for s in config.SHOPS)}")
-    await bot.poll_once(db, lock, config.BOT_TOKEN, config.CHAT_ID)
+    await bot.poll_once(db, lock, config.BOT_TOKEN, config.NOTIFY_CHAT_IDS)
 
     saved_offset = await db_module.kv_get(db, lock, "tg_offset")
     offset = int(saved_offset) + 1 if saved_offset else None

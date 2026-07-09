@@ -1,8 +1,11 @@
 """Оркестрация: поллинг Ozon (Проход A/B из плана) по НЕСКОЛЬКИМ магазинам,
 long-polling Telegram, команды/инлайн-кнопки для сборки PDF, авто-рестарт.
 
-Реагирует только на config.CHAT_ID — это личный бот одного продавца (может
-вести несколько магазинов Ozon в один чат), не многопользовательский сервис.
+Команды и кнопки реагируют только на config.CHAT_ID — это личный бот одного
+продавца (может вести несколько магазинов Ozon в один чат), не
+многопользовательский сервис. Уведомления/этикетки при этом можно дублировать
+на просмотр другим людям через config.EXTRA_CHAT_IDS (см. .env.example) —
+они получают те же сообщения, но не могут управлять ботом.
 """
 import asyncio
 import datetime
@@ -57,8 +60,15 @@ def _telegram_client(timeout):
     return httpx.AsyncClient(timeout=timeout, proxy=config.TELEGRAM_PROXY)
 
 
-async def telegram_send(bot_token, chat_id, text, reply_markup=None):
+async def telegram_send(bot_token, chat_id, text, reply_markup=None) -> bool:
+    """Возвращает True, только если ВСЕ чанки текста реально ушли — вызовы,
+    для которых важна exactly-once семантика (уведомления/отмены в
+    poll_once), должны проверять это перед тем, как помечать что-то
+    отправленным в БД, а не полагаться на отсутствие исключения (раньше
+    ошибка отправки тут просто логировалась и терялась, и заказ мог
+    оказаться помечен notified_at, хотя сообщение не дошло)."""
     api = TELEGRAM_API.format(token=bot_token, method="sendMessage")
+    ok = True
     async with _telegram_client(25) as client:
         for start in range(0, max(1, len(text)), 4000):
             chunk = text[start:start + 4000]
@@ -70,6 +80,8 @@ async def telegram_send(bot_token, chat_id, text, reply_markup=None):
                 r.raise_for_status()
             except Exception as e:
                 print(f"[telegram] send failed: {type(e).__name__}: {e}")
+                ok = False
+    return ok
 
 
 async def telegram_send_keyboard(bot_token, chat_id, text, reply_markup) -> int:
@@ -204,22 +216,36 @@ def _extract_products(posting: dict) -> list:
 # === Проход A/B — поллинг Ozon
 # ============================================================
 
-async def send_new_order_notification(bot_token, chat_id, shop, posting_number, products):
+async def _send_order_message(bot_token, chat_id, photo_url, caption) -> bool:
+    if photo_url:
+        try:
+            await telegram_send_photo(bot_token, chat_id, photo_url, caption)
+            return True
+        except Exception as e:
+            print(f"[notify] фото не отправилось ({chat_id}): {e}")
+    return await telegram_send(bot_token, chat_id, caption)
+
+
+async def send_new_order_notification(bot_token, chat_ids, shop, posting_number, products) -> bool:
+    """chat_ids[0] — основной получатель, от его доставки зависит, будет ли
+    отправление помечено notified_at (см. poll_once). Остальные — доп.
+    получатели best-effort: их сбой логируется, но не блокирует пометку и
+    не ретраится бесконечно (иначе один заблокировавший бота человек
+    остановил бы уведомления вообще для всех)."""
     offer_ids = [p["offer_id"] for p in products if p.get("offer_id")]
     images = await ozon_client.get_product_main_images(shop, offer_ids) if offer_ids else {}
     photo_url = next((images.get(p.get("offer_id")) for p in products if images.get(p.get("offer_id"))), None)
     names = "\n".join(f"• {p.get('name') or p.get('offer_id')} × {p.get('quantity', 1)}" for p in products)
     caption = f"📦 [{shop.name}] Новое отправление {posting_number}\n{names}"
-    if photo_url:
-        try:
-            await telegram_send_photo(bot_token, chat_id, photo_url, caption)
-            return
-        except Exception as e:
-            print(f"[notify] фото не отправилось для {posting_number}, шлём текстом: {e}")
-    await telegram_send(bot_token, chat_id, caption)
+
+    ok_primary = await _send_order_message(bot_token, chat_ids[0], photo_url, caption)
+    for chat_id in chat_ids[1:]:
+        if not await _send_order_message(bot_token, chat_id, photo_url, caption):
+            print(f"[notify] доп. получателю {chat_id} не удалось отправить {posting_number}")
+    return ok_primary
 
 
-async def process_label_ready(db, lock, bot_token, chat_id):
+async def process_label_ready(db, lock, bot_token, chat_ids):
     rows = await db_module.get_label_pending(db, lock)
     if not rows:
         return
@@ -250,12 +276,18 @@ async def process_label_ready(db, lock, bot_token, chat_id):
             except Exception as e:
                 print(f"[label] наложение артикула не удалось для {pn}: {e}")
                 overlaid = raw_pdf
+
+            caption = f"🏷 [{shop.name}] Этикетка {pn}"
             try:
-                await telegram_send_document(bot_token, chat_id, overlaid, f"{pn}.pdf",
-                                              caption=f"🏷 [{shop.name}] Этикетка {pn}")
+                await telegram_send_document(bot_token, chat_ids[0], overlaid, f"{pn}.pdf", caption=caption)
             except Exception as e:
                 print(f"[label] отправка не удалась для {pn}, повторим позже: {e}")
                 continue
+            for chat_id in chat_ids[1:]:
+                try:
+                    await telegram_send_document(bot_token, chat_id, overlaid, f"{pn}.pdf", caption=caption)
+                except Exception as e:
+                    print(f"[label] доп. получателю {chat_id} не удалось отправить {pn}: {e}")
             await db_module.mark_label_sent(db, lock, pn, raw_pdf, now)
 
         for pn, reason in error_map.items():
@@ -318,7 +350,7 @@ async def _poll_shop(db, lock, shop) -> set:
     return fetched
 
 
-async def poll_once(db, lock, bot_token, chat_id):
+async def poll_once(db, lock, bot_token, chat_ids):
     for shop in config.SHOPS:
         try:
             await _poll_shop(db, lock, shop)
@@ -330,7 +362,11 @@ async def poll_once(db, lock, bot_token, chat_id):
     # Уведомления/отмены/этикетки — по всем магазинам сразу (каждая строка
     # несёт свой shop_key, exactly-once гарантируется в БД через
     # notified_at/label_sent_at IS NULL, независимо от того, из какого
-    # магазина отправление).
+    # магазина отправление). chat_ids[0] — основной получатель: doставка
+    # ИМЕННО ему решает, помечать ли что-то отправленным (см. комментарии в
+    # send_new_order_notification/telegram_send) — иначе сбой доставки
+    # молча терялся бы (ошибка логировалась, но notified_at всё равно
+    # проставлялся).
     for pn, shop_key, _status, products_json in await db_module.get_unnotified(db, lock):
         products = json.loads(products_json)
         shop = SHOPS_BY_KEY.get(shop_key)
@@ -338,24 +374,29 @@ async def poll_once(db, lock, bot_token, chat_id):
             print(f"[notify] неизвестный shop_key={shop_key} для {pn} — пропускаю")
             continue
         try:
-            await send_new_order_notification(bot_token, chat_id, shop, pn, products)
+            delivered = await send_new_order_notification(bot_token, chat_ids, shop, pn, products)
         except Exception as e:
             print(f"[notify] {pn} не отправилось: {e}")
+            continue
+        if not delivered:
+            print(f"[notify] {pn}: не доставлено основному получателю, повторим на следующем цикле")
             continue
         await db_module.mark_notified(db, lock, pn, int(time.time()))
 
     for pn, shop_key, products_json in await db_module.get_cancel_unnotified(db, lock):
         products = json.loads(products_json)
-        try:
-            await telegram_send(bot_token, chat_id,
-                                 f"❌ [{_shop_name(shop_key)}] Отправление {pn} отменено — этикетки не будет.\n"
-                                 f"{_short_name(products)}")
-        except Exception as e:
-            print(f"[cancel-notify] {pn} не отправилось: {e}")
+        text = (f"❌ [{_shop_name(shop_key)}] Отправление {pn} отменено — этикетки не будет.\n"
+                f"{_short_name(products)}")
+        delivered = await telegram_send(bot_token, chat_ids[0], text)
+        for chat_id in chat_ids[1:]:
+            if not await telegram_send(bot_token, chat_id, text):
+                print(f"[cancel-notify] доп. получателю {chat_id} не удалось отправить {pn}")
+        if not delivered:
+            print(f"[cancel-notify] {pn}: не доставлено основному получателю, повторим на следующем цикле")
             continue
         await db_module.mark_cancel_notified(db, lock, pn, int(time.time()))
 
-    await process_label_ready(db, lock, bot_token, chat_id)
+    await process_label_ready(db, lock, bot_token, chat_ids)
 
 
 # ============================================================
@@ -692,14 +733,19 @@ async def main():
 
     print(f"[bot] Запущен. Поллинг Ozon каждые {config.POLL_SECONDS} сек.")
     try:
+        # Клавиатура — только основному чату: доп. получатели не могут
+        # управлять ботом (см. фильтр по config.CHAT_ID в telegram_worker),
+        # так что кнопки под их сообщениями просто не работали бы.
         await telegram_send(config.BOT_TOKEN, config.CHAT_ID, "🤖 Бот запущен.", reply_markup=MAIN_KEYBOARD)
+        for chat_id in config.NOTIFY_CHAT_IDS[1:]:
+            await telegram_send(config.BOT_TOKEN, chat_id, "🤖 Бот запущен.")
     except Exception as e:
         print(f"[bot] стартовое сообщение не отправилось: {e}")
 
     async def polling_worker():
         while True:
             try:
-                await poll_once(db, lock, config.BOT_TOKEN, config.CHAT_ID)
+                await poll_once(db, lock, config.BOT_TOKEN, config.NOTIFY_CHAT_IDS)
             except Exception as e:
                 print(f"[poll] цикл упал: {type(e).__name__}: {e}")
             await asyncio.sleep(config.POLL_SECONDS)
@@ -722,6 +768,11 @@ async def main():
                     if message and "text" in message:
                         msg_chat_id = str(message["chat"]["id"])
                         if msg_chat_id != str(config.CHAT_ID):
+                            # Доп. получатели (config.EXTRA_CHAT_IDS) — только
+                            # просмотр, команды не обрабатываем. Печатаем
+                            # chat_id, чтобы его можно было найти в логах при
+                            # добавлении нового получателя (см. README).
+                            print(f"[telegram] сообщение от постороннего chat_id={msg_chat_id}, игнорирую: {message['text'][:80]!r}")
                             continue
                         await handle_command(db, lock, config.BOT_TOKEN, msg_chat_id, message["text"], merge_sessions)
                     elif callback_query:
@@ -739,10 +790,9 @@ async def main():
             await asyncio.sleep(config.HEARTBEAT_SECONDS)
             try:
                 stats = await db_module.get_stats(db, lock)
-                await telegram_send(
-                    config.BOT_TOKEN, config.CHAT_ID,
-                    f"💓 Бот жив. Ожидают печати: {stats['pending']}, напечатано всего: {stats['printed']}",
-                )
+                text = f"💓 Бот жив. Ожидают печати: {stats['pending']}, напечатано всего: {stats['printed']}"
+                for chat_id in config.NOTIFY_CHAT_IDS:
+                    await telegram_send(config.BOT_TOKEN, chat_id, text)
             except Exception as e:
                 print(f"[heartbeat] не удался: {e}")
 
