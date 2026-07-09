@@ -226,16 +226,26 @@ async def handle_print_labels(request):
 # === Статика
 # ============================================================
 
+# Без Cache-Control WebView Telegram может закешировать старую версию
+# одного файла (например app.js) вместе со свежей версией другого
+# (index.html) — при активной разработке это уже один раз привело к тому,
+# что новый JS ссылался на элемент, которого не было в закэшированном
+# старом HTML, и список молча переставал рендериться. no-cache вместо
+# no-store — чтобы ETag/304 всё ещё работали, просто не доверяя локальному
+# кэшу вслепую.
+_NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
+
+
 async def handle_index(request):
-    return web.FileResponse(WEBAPP_DIR / "index.html")
+    return web.FileResponse(WEBAPP_DIR / "index.html", headers=_NO_CACHE)
 
 
 async def handle_app_js(request):
-    return web.FileResponse(WEBAPP_DIR / "app.js")
+    return web.FileResponse(WEBAPP_DIR / "app.js", headers=_NO_CACHE)
 
 
 async def handle_style_css(request):
-    return web.FileResponse(WEBAPP_DIR / "style.css")
+    return web.FileResponse(WEBAPP_DIR / "style.css", headers=_NO_CACHE)
 
 
 # ============================================================

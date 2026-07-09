@@ -76,11 +76,11 @@ function updateCounterAndButton() {
     tg.MainButton.setText(`🖨 Печать этикеток (${n})`);
     tg.MainButton.show();
     tg.MainButton.enable();
-    secondaryBtn.textContent = `🗂 PDF со списком (${n})`;
-    secondaryBar.style.display = "block";
+    if (secondaryBtn) secondaryBtn.textContent = `🗂 PDF со списком (${n})`;
+    if (secondaryBar) secondaryBar.style.display = "block";
   } else {
     tg.MainButton.hide();
-    secondaryBar.style.display = "none";
+    if (secondaryBar) secondaryBar.style.display = "none";
   }
 }
 
