@@ -33,13 +33,13 @@ MAIN_KEYBOARD = {
     "resize_keyboard": True,
     "is_persistent": True,
 }
-if config.WEBAPP_PUBLIC_URL:
-    # Mini App (webapp_server.py) — пусто по умолчанию и не задано в .env на
-    # VPS, так что на проде эта кнопка не появляется, пока не решат явно
-    # выкатывать (см. план разработки мини-аппа).
-    MAIN_KEYBOARD["keyboard"].append(
-        [{"text": "🗂 Список заказов", "web_app": {"url": config.WEBAPP_PUBLIC_URL}}]
-    )
+# Mini App НЕ кладём в обычную клавиатуру: у KeyboardButton.web_app Telegram
+# намеренно не передаёт initData (эта кнопка — для одноразовой отправки
+# данных боту, не для авторизованных API-запросов) — проверено вживую,
+# initData.length=0 и на iOS/Android, и на Desktop. Открывается через Menu
+# Button (кнопка у поля ввода) — единственный тип кнопки для reply-клавиатур/
+# меню, где initData реально приходит; настраивается отдельным вызовом
+# setChatMenuButton при старте (см. main()), не через MAIN_KEYBOARD.
 
 BUTTON_TEXT_TO_COMMAND = {
     "📋 Ожидают": "/pending",
@@ -156,6 +156,21 @@ async def telegram_send_document(bot_token, chat_id, pdf_bytes, filename, captio
         r = await client.post(api, data=data, files=files)
         if r.status_code != 200:
             raise RuntimeError(f"sendDocument failed: {r.status_code} {r.text[:300]}")
+
+
+async def telegram_set_menu_button(bot_token, text, url) -> bool:
+    """Menu Button — кнопка у поля ввода (не в reply-клавиатуре). Без
+    chat_id — это значение по умолчанию для всех приватных чатов бота, где
+    нет персонального override; для этого приватного бота этого достаточно
+    (не-админам сервер всё равно ответит 403, см. webapp_server.py)."""
+    api = TELEGRAM_API.format(token=bot_token, method="setChatMenuButton")
+    payload = {"menu_button": json.dumps({"type": "web_app", "text": text, "web_app": {"url": url}})}
+    async with _telegram_client(25) as client:
+        r = await client.post(api, data=payload)
+        if r.status_code != 200:
+            print(f"[telegram] setChatMenuButton failed: {r.status_code} {r.text[:200]}")
+            return False
+        return True
 
 
 async def telegram_get_updates(bot_token, offset, timeout=20):
@@ -733,6 +748,10 @@ async def main():
             await telegram_send(config.BOT_TOKEN, chat_id, "🤖 Бот запущен.", reply_markup=MAIN_KEYBOARD)
     except Exception as e:
         print(f"[bot] стартовое сообщение не отправилось: {e}")
+
+    if config.WEBAPP_PUBLIC_URL:
+        if await telegram_set_menu_button(config.BOT_TOKEN, "Список заказов", config.WEBAPP_PUBLIC_URL):
+            print("[bot] Menu Button настроена (мини-апп).")
 
     async def polling_worker():
         while True:
