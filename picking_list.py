@@ -11,6 +11,7 @@ label_sent_at (тех же полей, которыми управляет /merg
 """
 import io
 
+from PIL import Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
@@ -77,10 +78,32 @@ def _fit_multiline(c: canvas.Canvas, text: str, max_width: float, max_height: fl
     return lines, size
 
 
+_MAX_PHOTO_DIM = 700  # px — с запасом под физический размер ячейки, не оригинал Ozon
+_PHOTO_JPEG_QUALITY = 78
+
+
+def _prepare_photo(photo_bytes: bytes):
+    """Пережимает фото под реальный размер ячейки — Ozon отдаёт фото в
+    исходном разрешении (иногда по несколько МБ на штуку), и без этого
+    собранный PDF на 100+ заказов выходил за 25+ МБ и не успевал
+    загрузиться в Telegram через TELEGRAM_PROXY (см. bot.py) за разумное
+    время — реальный кейс, не гипотетический (120 заказов = 504/таймаут)."""
+    try:
+        img = Image.open(io.BytesIO(photo_bytes)).convert("RGB")  # RGB — на случай PNG с альфа-каналом
+        img.thumbnail((_MAX_PHOTO_DIM, _MAX_PHOTO_DIM), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=_PHOTO_JPEG_QUALITY, optimize=True)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[picking-list] не удалось пережать фото: {e}")
+        return None
+
+
 def _draw_photo(c: canvas.Canvas, photo_bytes, x: float, y: float, w: float, h: float) -> None:
-    if photo_bytes:
+    prepared = _prepare_photo(photo_bytes) if photo_bytes else None
+    if prepared:
         try:
-            img = ImageReader(io.BytesIO(photo_bytes))
+            img = ImageReader(io.BytesIO(prepared))
             iw, ih = img.getSize()
             scale = min(w / iw, h / ih)
             draw_w, draw_h = iw * scale, ih * scale

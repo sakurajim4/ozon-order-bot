@@ -152,7 +152,11 @@ async def telegram_send_document(bot_token, chat_id, pdf_bytes, filename, captio
     if caption:
         data["caption"] = caption[:1024]
     files = {"document": (filename, pdf_bytes, "application/pdf")}
-    async with _telegram_client(60) as client:
+    # 180 сек, не 60 — большие сборные PDF (много фото, десятки-сотни
+    # заказов) через TELEGRAM_PROXY (см. config.py) грузятся заметно
+    # медленнее прямого аплоада; при 60 сек упирались в таймаут на
+    # реальных объёмах (120 заказов), см. память проекта.
+    async with _telegram_client(180) as client:
         r = await client.post(api, data=data, files=files)
         if r.status_code != 200:
             raise RuntimeError(f"sendDocument failed: {r.status_code} {r.text[:300]}")

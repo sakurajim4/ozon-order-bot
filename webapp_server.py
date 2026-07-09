@@ -149,36 +149,53 @@ async def handle_picking_list(request):
         if shop:
             images_by_shop[shop_key] = await ozon_client.get_product_main_images(shop, list(offer_ids))
 
-    items = []
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        for pn in posting_numbers:
-            row = found.get(pn)
-            if not row or row[6]:
-                continue
-            shop_key, products_json = row[1], row[3]
-            products = json.loads(products_json)
-            if not products:
-                continue
-            images = images_by_shop.get(shop_key, {})
-            photo_url = next(
-                (images.get(p.get("offer_id")) for p in products if images.get(p.get("offer_id"))), None,
-            )
-            photo_bytes = None
-            if photo_url:
-                try:
-                    r = await client.get(photo_url)
-                    if r.status_code == 200:
-                        photo_bytes = r.content
-                except Exception as e:
-                    print(f"[webapp] фото не скачалось для {pn}: {e}")
-            items.append({
-                "photo_bytes": photo_bytes,
-                "name": bot._short_name(products),
-                "qty": products[0].get("quantity", 1),
-            })
+    # Собираем список позиций без фото — фото качаем ниже ПАРАЛЛЕЛЬНО
+    # (было по одной штуке подряд: на ~100+ заказах упиралось в
+    # proxy_read_timeout nginx и клиент получал 504, хотя PDF на бэкенде
+    # мог всё же дособраться и уйти в чат).
+    entries = []
+    for pn in posting_numbers:
+        row = found.get(pn)
+        if not row or row[6]:
+            continue
+        shop_key, products_json = row[1], row[3]
+        products = json.loads(products_json)
+        if not products:
+            continue
+        images = images_by_shop.get(shop_key, {})
+        photo_url = next(
+            (images.get(p.get("offer_id")) for p in products if images.get(p.get("offer_id"))), None,
+        )
+        entries.append({
+            "photo_url": photo_url,
+            "name": bot._short_name(products),
+            "qty": products[0].get("quantity", 1),
+        })
 
-    if not items:
+    if not entries:
         raise web.HTTPBadRequest(text="Нечего собирать — все номера не найдены или отменены")
+
+    sem = asyncio.Semaphore(10)  # не заваливаем CDN Ozon сотней одновременных запросов
+
+    async def _fetch_photo(client, photo_url):
+        if not photo_url:
+            return None
+        async with sem:
+            try:
+                r = await client.get(photo_url)
+                if r.status_code == 200:
+                    return r.content
+            except Exception as e:
+                print(f"[webapp] фото не скачалось: {e}")
+        return None
+
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        photos = await asyncio.gather(*(_fetch_photo(client, e["photo_url"]) for e in entries))
+
+    items = [
+        {"photo_bytes": photo, "name": e["name"], "qty": e["qty"]}
+        for e, photo in zip(entries, photos)
+    ]
 
     pdf_bytes = picking_list.build_pdf(items)
     ts = time.strftime("%Y-%m-%d_%H-%M")
