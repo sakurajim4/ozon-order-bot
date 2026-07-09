@@ -245,11 +245,17 @@ async def send_new_order_notification(bot_token, chat_ids, shop, posting_number,
     return ok_primary
 
 
-async def process_label_ready(db, lock, bot_token, chat_ids):
+async def process_label_ready(db, lock):
+    """Только забирает этикетку у Ozon и кэширует (label_pdf_cached в БД) —
+    раньше сразу же слала её отдельным сообщением на каждое отправление, но
+    это убрали по просьбе (шумно, дублирует кнопку "🖨 Печать"/сборный PDF,
+    см. run_merge). Название mark_label_sent в db.py осталось как есть,
+    хотя теперь по факту означает "получена и закэширована", а не
+    "отправлена в Telegram" — переименовывать колонку в БД ради этого не
+    стали."""
     rows = await db_module.get_label_pending(db, lock)
     if not rows:
         return
-    products_by_pn = {r[0]: json.loads(r[3]) for r in rows}
 
     # Каждый магазин — свои ключи API, поэтому забираем этикетки отдельным
     # батчем на магазин (posting_number из разных магазинов не смешиваем).
@@ -269,25 +275,6 @@ async def process_label_ready(db, lock, bot_token, chat_ids):
         print(f"[label] [{shop.name}] получено {len(label_map)}, ошибок {len(error_map)}, "
               f"{time.time() - t0:.1f} сек", flush=True)
         for pn, raw_pdf in label_map.items():
-            products = products_by_pn[pn]
-            lines = pdf_label.format_offer_id_lines(products)
-            try:
-                overlaid = pdf_label.overlay_offer_ids(raw_pdf, lines)
-            except Exception as e:
-                print(f"[label] наложение артикула не удалось для {pn}: {e}")
-                overlaid = raw_pdf
-
-            caption = f"🏷 [{shop.name}] Этикетка {pn}"
-            try:
-                await telegram_send_document(bot_token, chat_ids[0], overlaid, f"{pn}.pdf", caption=caption)
-            except Exception as e:
-                print(f"[label] отправка не удалась для {pn}, повторим позже: {e}")
-                continue
-            for chat_id in chat_ids[1:]:
-                try:
-                    await telegram_send_document(bot_token, chat_id, overlaid, f"{pn}.pdf", caption=caption)
-                except Exception as e:
-                    print(f"[label] доп. получателю {chat_id} не удалось отправить {pn}: {e}")
             await db_module.mark_label_sent(db, lock, pn, raw_pdf, now)
 
         for pn, reason in error_map.items():
@@ -396,7 +383,7 @@ async def poll_once(db, lock, bot_token, chat_ids):
             continue
         await db_module.mark_cancel_notified(db, lock, pn, int(time.time()))
 
-    await process_label_ready(db, lock, bot_token, chat_ids)
+    await process_label_ready(db, lock)
 
 
 # ============================================================
