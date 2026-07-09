@@ -48,13 +48,13 @@ async def main():
                 callback_query = update.get("callback_query")
                 if message and "text" in message:
                     chat_id = str(message["chat"]["id"])
-                    if chat_id == str(config.CHAT_ID):
+                    if chat_id in config.ADMIN_CHAT_IDS:
                         await bot.handle_command(db, lock, config.BOT_TOKEN, chat_id,
                                                   message["text"], merge_sessions)
                         processed += 1
                 elif callback_query:
                     chat_id = str(callback_query["message"]["chat"]["id"])
-                    if chat_id == str(config.CHAT_ID):
+                    if chat_id in config.ADMIN_CHAT_IDS:
                         await bot.handle_callback(db, lock, config.BOT_TOKEN, chat_id,
                                                    callback_query, merge_sessions)
                         processed += 1

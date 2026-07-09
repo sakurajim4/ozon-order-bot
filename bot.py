@@ -1,11 +1,10 @@
 """Оркестрация: поллинг Ozon (Проход A/B из плана) по НЕСКОЛЬКИМ магазинам,
 long-polling Telegram, команды/инлайн-кнопки для сборки PDF, авто-рестарт.
 
-Команды и кнопки реагируют только на config.CHAT_ID — это личный бот одного
-продавца (может вести несколько магазинов Ozon в один чат), не
-многопользовательский сервис. Уведомления/этикетки при этом можно дублировать
-на просмотр другим людям через config.EXTRA_CHAT_IDS (см. .env.example) —
-они получают те же сообщения, но не могут управлять ботом.
+Команды и кнопки реагируют на любой chat_id из config.ADMIN_CHAT_IDS
+(CHAT_ID + config.EXTRA_CHAT_IDS, см. .env.example) — несколько человек
+могут независимо друг от друга получать уведомления и управлять ботом
+(каждый свою /merge-сессию, см. merge_sessions, keyed по chat_id).
 """
 import asyncio
 import datetime
@@ -720,12 +719,10 @@ async def main():
 
     print(f"[bot] Запущен. Поллинг Ozon каждые {config.POLL_SECONDS} сек.")
     try:
-        # Клавиатура — только основному чату: доп. получатели не могут
-        # управлять ботом (см. фильтр по config.CHAT_ID в telegram_worker),
-        # так что кнопки под их сообщениями просто не работали бы.
-        await telegram_send(config.BOT_TOKEN, config.CHAT_ID, "🤖 Бот запущен.", reply_markup=MAIN_KEYBOARD)
-        for chat_id in config.NOTIFY_CHAT_IDS[1:]:
-            await telegram_send(config.BOT_TOKEN, chat_id, "🤖 Бот запущен.")
+        # Клавиатура — всем админам (config.ADMIN_CHAT_IDS): каждый из них
+        # может управлять ботом, кнопки работают у всех одинаково.
+        for chat_id in config.NOTIFY_CHAT_IDS:
+            await telegram_send(config.BOT_TOKEN, chat_id, "🤖 Бот запущен.", reply_markup=MAIN_KEYBOARD)
     except Exception as e:
         print(f"[bot] стартовое сообщение не отправилось: {e}")
 
@@ -754,17 +751,16 @@ async def main():
                     callback_query = update.get("callback_query")
                     if message and "text" in message:
                         msg_chat_id = str(message["chat"]["id"])
-                        if msg_chat_id != str(config.CHAT_ID):
-                            # Доп. получатели (config.EXTRA_CHAT_IDS) — только
-                            # просмотр, команды не обрабатываем. Печатаем
-                            # chat_id, чтобы его можно было найти в логах при
-                            # добавлении нового получателя (см. README).
+                        if msg_chat_id not in config.ADMIN_CHAT_IDS:
+                            # Печатаем chat_id постороннего отправителя, чтобы
+                            # его можно было найти в логах при добавлении
+                            # нового человека в EXTRA_CHAT_IDS (см. README).
                             print(f"[telegram] сообщение от постороннего chat_id={msg_chat_id}, игнорирую: {message['text'][:80]!r}")
                             continue
                         await handle_command(db, lock, config.BOT_TOKEN, msg_chat_id, message["text"], merge_sessions)
                     elif callback_query:
                         cb_chat_id = str(callback_query["message"]["chat"]["id"])
-                        if cb_chat_id != str(config.CHAT_ID):
+                        if cb_chat_id not in config.ADMIN_CHAT_IDS:
                             continue
                         await handle_callback(db, lock, config.BOT_TOKEN, cb_chat_id, callback_query, merge_sessions)
                 except Exception as e:
