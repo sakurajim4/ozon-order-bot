@@ -17,6 +17,7 @@ import config
 import db as db_module
 import ozon_client
 import pdf_label
+import webapp_server  # безопасен к циклическому импорту: webapp_server трогает bot.* только внутри функций, не на уровне модуля
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 MERGE_PAGE_SIZE = 8
@@ -32,6 +33,13 @@ MAIN_KEYBOARD = {
     "resize_keyboard": True,
     "is_persistent": True,
 }
+if config.WEBAPP_PUBLIC_URL:
+    # Mini App (webapp_server.py) — пусто по умолчанию и не задано в .env на
+    # VPS, так что на проде эта кнопка не появляется, пока не решат явно
+    # выкатывать (см. план разработки мини-аппа).
+    MAIN_KEYBOARD["keyboard"].append(
+        [{"text": "🗂 Список заказов", "web_app": {"url": config.WEBAPP_PUBLIC_URL}}]
+    )
 
 BUTTON_TEXT_TO_COMMAND = {
     "📋 Ожидают": "/pending",
@@ -779,10 +787,19 @@ async def main():
             except Exception as e:
                 print(f"[heartbeat] не удался: {e}")
 
+    async def webapp_worker():
+        if not config.WEBAPP_PUBLIC_URL:
+            return  # мини-апп не настроен — как и раньше, ничего не меняется
+        try:
+            await webapp_server.run_embedded(db, lock)
+        except Exception as e:
+            print(f"[webapp] упал: {type(e).__name__}: {e}")
+
     await asyncio.gather(
         polling_worker(),
         telegram_worker(),
         heartbeat_worker(),
+        webapp_worker(),
     )
 
 

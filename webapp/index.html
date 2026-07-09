@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Список заказов</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <div class="toolbar">
+    <input id="filter" type="text" placeholder="🔎 Поиск по названию или номеру">
+  </div>
+  <div class="toolbar toolbar-actions">
+    <button id="select-all" class="btn-link">☑️ Отметить все</button>
+    <button id="select-none" class="btn-link">⬜ Снять все</button>
+    <span id="counter" class="counter">Выбрано: 0</span>
+  </div>
+  <div id="list"></div>
+  <div id="empty" class="empty" style="display:none">Нет заказов, ожидающих печати.</div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

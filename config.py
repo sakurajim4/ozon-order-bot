@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(_BASE_DIR, ".env"), override=True)
+# OZON_BOT_ENV_FILE — переключатель на альтернативный .env (например,
+# .env.webapp-test с токеном тестового бота), чтобы локальная разработка
+# мини-аппа не могла случайно задеть боевого бота/чат. По умолчанию — как
+# раньше, обычный .env.
+_ENV_FILE = os.environ.get("OZON_BOT_ENV_FILE", ".env")
+load_dotenv(os.path.join(_BASE_DIR, _ENV_FILE), override=True)
 
 
 def _require(name: str) -> str:
@@ -102,3 +107,10 @@ TELEGRAM_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 # режется на уровне сети, см. DEPLOY.md. Формат: socks5h://user:pass@host:port
 # (пусто = без прокси, прямое подключение).
 TELEGRAM_PROXY = os.environ.get("TELEGRAM_PROXY", "").strip() or None
+
+# Telegram Mini App (webapp_server.py) — публичный HTTPS-адрес мини-аппа.
+# Пусто по умолчанию: пока не задано, bot.py не добавляет кнопку запуска
+# в клавиатуру, поведение не меняется (см. план — фича разрабатывается
+# локально, на боевой сервер это не выкатывается, пока явно не решат).
+WEBAPP_PUBLIC_URL = os.environ.get("WEBAPP_PUBLIC_URL", "").strip() or None
+WEBAPP_PORT = int(os.environ.get("WEBAPP_PORT", "8787"))
